@@ -313,6 +313,7 @@ public:
   /* Power managments functions */
   void enterSuspendMode();
   void enterNormalMode();
+  void enterLowPowerMode();
 
 private:
   byte read8(adafruit_bno055_reg_t);
