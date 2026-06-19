@@ -880,3 +880,121 @@ bool Adafruit_BNO055::readLen(adafruit_bno055_reg_t reg, byte *buffer,
   uint8_t reg_buf[1] = {(uint8_t)reg};
   return i2c_dev->write_then_read(reg_buf, 1, buffer, len);
 }
+
+/*!
+ *  @brief  Gets and clears the interrupt status
+ */
+bool Adafruit_BNO055::getClearINTStatus(adafruit_bno055_int_status_t status) {
+  // Ensure we're on page 0 to read the INT_STATUS register
+  uint8_t page_id = read8(BNO055_PAGE_ID_ADDR);
+  if (page_id != 0) {
+    write8(BNO055_PAGE_ID_ADDR, 0);
+    delay(10);
+  }
+
+  uint8_t int_status = read8(BNO055_INT_STATUS_ADDR);
+
+  // Reset the interrupt status via SYS TRIGGER register
+  uint8_t reset_int = (1 << 6);
+  write8(BNO055_SYS_TRIGGER_ADDR, reset_int);  // RST_INT is in the 6th bit
+  delay(50);
+
+  // Return to the previous page if needed
+  if (page_id != 0) {
+    write8(BNO055_PAGE_ID_ADDR, page_id);
+    delay(10);
+  }
+  
+  // Apply the mask to check the specific interrupt status bit
+  switch(status) {
+    case INT_STATUS_AM:
+      return (int_status & (1 << INT_STATUS_AM)) != 0;
+    case INT_STATUS_NM:
+      return (int_status & (1 << INT_STATUS_NM)) != 0;
+    default:
+      return false;
+  }
+}
+
+/*!
+ *  @brief  Sets up the low power interrupts
+ */
+bool Adafruit_BNO055::setupLowPowerInterrupts(adafruit_bno055_axis_t axis, bool enableAM, bool enableNM, bool triggerINTPinAM, bool triggerINTPinNM, uint8_t AMTriggerCount, uint8_t NMTriggerDuration, float AMTriggerThreshold, float NMTriggerThreshold) {
+
+  uint8_t status = 0;
+
+  // Enter config mode to setup interrupts
+  adafruit_bno055_opmode_t modeback = _mode;
+  setMode(OPERATION_MODE_CONFIG);
+  delay(25);
+
+  // Save selected page ID and switch to page 1
+  uint8_t page_id = read8(BNO055_PAGE_ID_ADDR);
+  write8(BNO055_PAGE_ID_ADDR, 0x01);
+  delay(30);
+  if (read8(BNO055_PAGE_ID_ADDR) == 0x01)
+    status += 1;
+
+  // Enable or Disable AM and NM interrupts
+  uint8_t int_en = (enableAM ? (1 << INT_STATUS_AM) : 0) | (enableNM ? (1 << INT_STATUS_NM) : 0);
+  write8(BNO055_INT_EN_ADDR, int_en);
+  if (read8(BNO055_INT_EN_ADDR) == int_en)
+    status += 1;
+
+  // Setup interrupt settings based on the axis and AM trigger counts
+  uint8_t interrupt_settings = 0;
+  interrupt_settings |= (AMTriggerCount - 1) & 0x03; // Set the AM trigger count (2 bits). Anything greater than 4 will be masked to fit into 2 bits
+  switch(axis)
+  {
+    case AXIS_X:
+      interrupt_settings |= (1<<2); 
+      break;
+    case AXIS_Y:
+      interrupt_settings |= (1<<3); 
+      break;
+    case AXIS_Z:
+      interrupt_settings |= (1<<4);
+      break;
+  }
+  write8(BNO055_ACCEL_INT_SETTINGS_ADDR, interrupt_settings);
+  if (read8(BNO055_ACCEL_INT_SETTINGS_ADDR) == interrupt_settings)
+    status += 1;
+
+  // Set the interrupt mask to enable the selected interrupts on the INT pin
+  uint8_t int_mask = (triggerINTPinAM ? (1 << INT_STATUS_AM) : 0) | (triggerINTPinNM ? (1 << INT_STATUS_NM) : 0);
+  write8(BNO055_INT_MASK_ADDR, int_mask);
+  if (read8(BNO055_INT_MASK_ADDR) == int_mask)
+    status += 1;
+
+  // Setup NM settings and enable NM 
+  uint8_t nm_settings = 0;
+  nm_settings |= (NMTriggerDuration - 1) << 1 & 0x7e; // Set the NM trigger duration (6 bits)
+  nm_settings |= enableNM ? (1 << 0) : 0;
+  write8(BNO055_ACCEL_NM_SET_ADDR, nm_settings);
+  if (read8(BNO055_ACCEL_NM_SET_ADDR) == nm_settings)
+    status += 1;
+
+  // Set the NM trigger threshold
+  // Convert the threshold value to a register value given: Register value = (user value / 7.81) for 4G setting
+  uint8_t nm_threshold = (uint8_t)(NMTriggerThreshold / 7.81);
+  write8(BNO055_ACCEL_NM_THRESH_ADDR, nm_threshold);
+  if (read8(BNO055_ACCEL_NM_THRESH_ADDR) == nm_threshold)
+    status += 1;
+
+  // Set the AM trigger threshold
+  // Convert in a similar way to the NM threshold
+  uint8_t am_threshold = (uint8_t)(AMTriggerThreshold / 7.81);
+  write8(BNO055_ACCEL_AM_THRESH_ADDR, am_threshold);
+  if (read8(BNO055_ACCEL_AM_THRESH_ADDR) == am_threshold)
+    status += 1;
+
+  // Restore the previous page ID and mode
+  write8(BNO055_PAGE_ID_ADDR, page_id);
+  setMode(modeback);
+  delay(20);
+
+  if (status == 7)
+    return true;
+  else
+    return false;
+}
